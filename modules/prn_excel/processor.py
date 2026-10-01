@@ -1,0 +1,209 @@
+import os
+import re
+import textwrap
+
+import openpyxl
+from openpyxl.utils import column_index_from_string
+
+
+def formatar_acentos_zpl(texto):
+    """
+    Converte caracteres não ASCII para hexadecimal UTF-8,
+    compatível com o comando ^FH do ZPL.
+    """
+    if not texto:
+        return ""
+
+    resultado = ""
+
+    for char in str(texto):
+        if ord(char) > 127:
+            hex_bytes = char.encode("utf-8")
+
+            for byte in hex_bytes:
+                resultado += f"\\{byte:02X}"
+        else:
+            resultado += char
+
+    return resultado
+
+
+def aplicar_substituicao_zpl(modelo_zpl, texto_alvo, texto_novo, usar_quebra):
+    """
+    Substitui o marcador no ZPL.
+
+    Quando a quebra automática está ativa, divide o texto
+    e incrementa a posição Y em 40 pontos por linha.
+    """
+
+    if not usar_quebra:
+        return modelo_zpl.replace(texto_alvo, texto_novo)
+
+    padrao = re.compile(
+        rf"(\^(?:FT|FO)\d+,)(\d+)(.*?\^FD)"
+        rf"({re.escape(texto_alvo)})(\^FS)",
+        re.IGNORECASE,
+    )
+
+    def replacer(match):
+        prefixo_x = match.group(1)
+        y_inicial = int(match.group(2))
+        configuracoes = match.group(3)
+        sufixo = match.group(5)
+
+        largura_maxima = max(len(texto_alvo), 1)
+
+        linhas_texto = textwrap.wrap(
+            texto_novo, width=largura_maxima, break_long_words=True
+        )
+
+        blocos_zpl = []
+
+        for indice, linha in enumerate(linhas_texto):
+            y_atual = y_inicial + (indice * 40)
+
+            blocos_zpl.append(f"{prefixo_x}{y_atual}{configuracoes}{linha}{sufixo}")
+
+        return "\n".join(blocos_zpl)
+
+    if padrao.search(modelo_zpl):
+        return padrao.sub(replacer, modelo_zpl)
+
+    # Substituição alternativa caso a estrutura ZPL não seja encontrada
+    return modelo_zpl.replace(texto_alvo, texto_novo)
+
+
+def validar_mapeamentos(mapeamentos):
+    """
+    Valida os marcadores e converte as letras das colunas
+    do Excel em índices numéricos.
+    """
+
+    if not mapeamentos:
+        raise ValueError("Adicione pelo menos um marcador antes de processar.")
+
+    pares_validos = []
+
+    for mapeamento in mapeamentos:
+        alvo = str(mapeamento.get("marker", "")).strip()
+        coluna = str(mapeamento.get("column", "")).strip().upper()
+
+        if not alvo or not coluna:
+            raise ValueError("Preencha todos os marcadores e suas colunas.")
+
+        try:
+            indice_coluna = column_index_from_string(coluna) - 1
+        except ValueError:
+            raise ValueError(f"Letra de coluna inválida: {coluna}")
+
+        pares_validos.append((alvo, indice_coluna))
+
+    return pares_validos
+
+
+def processar_arquivos(
+    caminho_modelo, caminho_excel, diretorio_saida, mapeamentos, usar_quebra=True
+):
+    """
+    Processa o modelo PRN utilizando os dados de uma planilha Excel.
+
+    Gera um arquivo PRN para cada aba que possuir registros válidos.
+
+    Retorna um resumo da operação.
+    """
+
+    # Validação dos arquivos
+    if not caminho_modelo or not os.path.isfile(caminho_modelo):
+        raise FileNotFoundError("Selecione um arquivo de modelo PRN válido.")
+
+    if not caminho_excel or not os.path.isfile(caminho_excel):
+        raise FileNotFoundError("Selecione uma planilha Excel válida.")
+
+    if not diretorio_saida or not os.path.isdir(diretorio_saida):
+        raise FileNotFoundError("Selecione uma pasta de saída válida.")
+
+    pares_validos = validar_mapeamentos(mapeamentos)
+
+    # Lê o modelo PRN
+    with open(caminho_modelo, "r", encoding="utf-8") as arquivo:
+        modelo_base = arquivo.read()
+
+    # Abre a planilha
+    workbook = openpyxl.load_workbook(caminho_excel, data_only=True, read_only=True)
+
+    arquivos_gerados = []
+    total_etiquetas = 0
+
+    try:
+        for nome_aba in workbook.sheetnames:
+            planilha = workbook[nome_aba]
+
+            lote_zpl_final = []
+            contador_etiquetas = 0
+
+            indice_principal = pares_validos[0][1]
+
+            for linha in planilha.iter_rows(min_row=1, values_only=True):
+                # Verifica se a linha possui o dado principal
+                dado_principal = (
+                    linha[indice_principal] if indice_principal < len(linha) else None
+                )
+
+                if dado_principal is None or str(dado_principal).strip() == "":
+                    continue
+
+                # Inicia uma etiqueta baseada no modelo original
+                etiqueta_pronta = modelo_base
+
+                # Substitui todos os marcadores configurados
+                for alvo, indice_coluna in pares_validos:
+                    dado = linha[indice_coluna] if indice_coluna < len(linha) else ""
+
+                    if dado is None:
+                        dado = ""
+
+                    texto_formatado = formatar_acentos_zpl(str(dado).strip())
+
+                    etiqueta_pronta = aplicar_substituicao_zpl(
+                        etiqueta_pronta, alvo, texto_formatado, usar_quebra
+                    )
+
+                lote_zpl_final.append(etiqueta_pronta)
+                contador_etiquetas += 1
+
+            # Gera arquivo somente se houver etiquetas
+            if contador_etiquetas > 0:
+                nome_arquivo_seguro = "".join(
+                    caractere
+                    for caractere in str(nome_aba)
+                    if caractere.isalnum() or caractere in (" ", "_", "-")
+                ).strip()
+
+                if not nome_arquivo_seguro:
+                    nome_arquivo_seguro = "Aba"
+
+                caminho_saida = os.path.join(
+                    diretorio_saida, f"{nome_arquivo_seguro}.prn"
+                )
+
+                with open(caminho_saida, "w", encoding="utf-8") as arquivo:
+                    arquivo.write("\n".join(lote_zpl_final) + "\n")
+
+                arquivos_gerados.append(
+                    {
+                        "aba": nome_aba,
+                        "caminho": caminho_saida,
+                        "etiquetas": contador_etiquetas,
+                    }
+                )
+
+                total_etiquetas += contador_etiquetas
+
+    finally:
+        workbook.close()
+
+    return {
+        "arquivos_gerados": arquivos_gerados,
+        "total_arquivos": len(arquivos_gerados),
+        "total_etiquetas": total_etiquetas,
+    }
