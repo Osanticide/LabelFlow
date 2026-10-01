@@ -161,7 +161,7 @@ def processar_arquivos(
 
     # Lê o modelo PRN
     with open(caminho_modelo, "r", encoding="utf-8-sig") as arquivo:
-        modelo_base = arquivo.read().replace("\ufeff", "")
+        modelo_base = arquivo.read()
 
     # Abre a planilha
     workbook = openpyxl.load_workbook(caminho_excel, data_only=True, read_only=True)
@@ -203,7 +203,7 @@ def processar_arquivos(
                         etiqueta_pronta, alvo, texto_formatado, usar_quebra
                     )
 
-                # Remove marcas BOM que possam ter vindo do modelo ou dos dados.\n                etiqueta_pronta = etiqueta_pronta.replace("\ufeff", "")\n\n                lote_zpl_final.append(etiqueta_pronta)
+                lote_zpl_final.append(etiqueta_pronta)
                 contador_etiquetas += 1
 
             # Gera arquivo somente se houver etiquetas
