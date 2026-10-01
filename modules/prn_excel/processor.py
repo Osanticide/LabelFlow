@@ -160,7 +160,7 @@ def processar_arquivos(
     pares_validos = validar_mapeamentos(mapeamentos)
 
     # Lê o modelo PRN
-    with open(caminho_modelo, "r", encoding="utf-8") as arquivo:
+    with open(caminho_modelo, "r", encoding="utf-8-sig") as arquivo:
         modelo_base = arquivo.read()
 
     # Abre a planilha
