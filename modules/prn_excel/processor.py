@@ -1,31 +1,66 @@
 import os
 import re
 import textwrap
+import unicodedata
 
 import openpyxl
 from openpyxl.utils import column_index_from_string
 
 
+def normalize_ascii(texto):
+    """
+    Converte letras acentuadas e alguns caracteres especiais para
+    equivalentes ASCII, evitando dependência de suporte a UTF-8
+    na impressora Zebra.
+    """
+    special_map = {
+        "ß": "ss",
+        "ẞ": "SS",
+        "Æ": "AE",
+        "æ": "ae",
+        "Œ": "OE",
+        "œ": "oe",
+        "Ø": "O",
+        "ø": "o",
+        "Ł": "L",
+        "ł": "l",
+        "Đ": "D",
+        "đ": "d",
+        "Ð": "D",
+        "ð": "d",
+        "Þ": "TH",
+        "þ": "th",
+    }
+
+    texto = "".join(special_map.get(char, char) for char in str(texto))
+    decomposed = unicodedata.normalize("NFKD", texto)
+
+    return "".join(
+        char
+        for char in decomposed
+        if not unicodedata.combining(char) and ord(char) < 128
+    )
+
+
 def formatar_acentos_zpl(texto):
     """
-    Converte caracteres não ASCII para hexadecimal UTF-8,
-    compatível com o comando ^FH do ZPL.
+    Normaliza o texto para ASCII e escapa caracteres que podem
+    interferir na sintaxe ZPL.
+
+    O modelo atual usa ^FH\\ nos campos ^FD, portanto os códigos
+    hexadecimais abaixo são interpretados pela impressora.
     """
     if not texto:
         return ""
 
-    resultado = ""
+    texto = normalize_ascii(texto)
 
-    for char in str(texto):
-        if ord(char) > 127:
-            hex_bytes = char.encode("utf-8")
-
-            for byte in hex_bytes:
-                resultado += f"\\{byte:02X}"
-        else:
-            resultado += char
-
-    return resultado
+    return (
+        texto
+        .replace("\\", "\\5C")
+        .replace("^", "\\5E")
+        .replace("~", "\\7E")
+    )
 
 
 def aplicar_substituicao_zpl(modelo_zpl, texto_alvo, texto_novo, usar_quebra):
@@ -186,7 +221,13 @@ def processar_arquivos(
                     diretorio_saida, f"{nome_arquivo_seguro}.prn"
                 )
 
-                with open(caminho_saida, "w", encoding="utf-8") as arquivo:
+                with open(
+                    caminho_saida,
+                    "w",
+                    encoding="ascii",
+                    errors="strict",
+                    newline="\n",
+                ) as arquivo:
                     arquivo.write("\n".join(lote_zpl_final) + "\n")
 
                 arquivos_gerados.append(
